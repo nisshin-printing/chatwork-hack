@@ -1,19 +1,12 @@
 /**
  * イベント通知用のオブジェクト生成
- *
- * @param string api_token チャットワークAPIのAPIトークン
- * @return EventNotifier
  */
 function factory(api_token) {
 		return new EventNotifier(api_token);
 }
 
 /**
- * 指定したカレンダーの予定をチャットワークへ通知
- *
- * @param string calendar_id GoogleCalendarのカレンダーID
- * @param int room_id 通知したい先のチャットワークのroom_id
- * @param object option
+ * 指定カレンダーの予定をチャットワークへ通知
  */
 function notify(calendar_id, room_id, option) {};
 
@@ -22,88 +15,70 @@ function notify(calendar_id, room_id, option) {};
 				function EventNotifier(api_token) {
 						this.api_token = api_token;
 				}
+				EventNotifier.prototype = {
+						/**
+						 * 指定カレンダーの予定を、指定チåャットへ通知する
+						 */
+						notify: function(calendar_id, room_id, option) {
+								// 通知メッセージ取得
+								var message = this.getNotifyMessage(calendar_id, option);
 
-				// 指定カレンダーの予定を、指定チåャットへ通知する
-				EventNotifier.prototype.notify = function(calendar_id, room_id, option) {
-						// 通知メッセージ取得
-						var message = this.getNotifyMessage(calendar_id, option);
+								// チャットワークAPIで送信
+								var cw = ChatWorkClient.factory({ token: this.api_token });
+								cw.sendMessage({ room_id: room_id, body: message });
+						},
+						/**
+						 * 指定カレンダーの予定をチャットワークのメッセージの形式で取得する
+						 */
+						getNotifyMessage: function(calendar_id, option) {
+								option = option || {};
+								var event_date = option.date || (new Date());
+								var events_header = option.header || '';
+								var events_header_no_event = option.header_no_event || '';
+								var target_calendar = CalendarApp.getCalendarById(calendar_id);
+								var calendar_name = target_calendar.getName();
+								var event_list = target_calendar.getEventsForDay(event_date);
+								var tpl, message_list = [];
+								for (var i = 0, len = event_list.length; i < len; i++) {
+										tpl = HtmlService.createTemplateFromFile('event');
 
-						// チャットワークAPIで送信
-						var cw = ChatWorkClient.factory({ token: this.api_token });
-						cw.sendMessage({ room_id: room_id, body: message });
-				};
+										var all_day_event = event_list[i].isAllDayEvent();
 
-				// 指定カレンダーの予定をチャットワークのメッセージの形式で取得する
-				EventNotifier.prototype.getNotifyMessage = function(calendar_id, option) {
-						option = option || {};
-
-						// イベントを取得する日付（指定がない場合は本日）
-						var event_date = option.date || (new Date());
-
-						// 通知タイトル（イベントがある場合に表示）
-						var events_header = option.header || '';
-
-						// 通知タイトル（イベントがない場合に表示）
-						var events_header_no_event = option.header_no_event || '';
-
-						//カレンダーオブジェクト取得
-						var target_calendar = CalendarApp.getCalendarById(calendar_id);
-						var calendar_name = target_calendar.getName();
-
-						// イベント一覧取得
-						var event_list = target_calendar.getEventsForDay(event_date);
-
-						var tpl, message_list = [];
-						for (var i = 0, len = event_list.length; i < len; i++) {
-								tpl = HtmlService.createTemplateFromFile('event');
-
-								var all_day_event = event_list[i].isAllDayEvent();
-
-								// 終日イベントの場合、開始日とチェックしている予定日の日付が一致しているか確認
-								// 終日イベントは 2013-11-11 00:00:00 - 2013-11-12 00:00:00 というように次の日の0時までという扱いなので、
-								// 11月12日の予定を取得した時に、前日の終日イベントが紛れ込む
-								if (all_day_event) {
-										// 日にちが一致しない場合は予定一覧に含めない
-										if (event_list[i].getStartTime().getDate() != event_date.getDate()) {
-												continue;
+										/**
+										 * 終日イベントの場合、開始日とチェックしている予定日の日付が一致しているか確認
+										 * 終日イベントは 2013-11-11 00-00-00 - 2013-11-12 00-00-00 というように次の日の0時までという扱いなので、
+										 * 11月12日の予定を取得した時に、前日の終日イベントが紛れ込む
+										 */
+										if (all_day_event) {
+												if (event_list[i].getStartTime().getDate() != event_date.getDate()) {
+														continue;
+												}
 										}
+										tpl.title = event_list[i].getTitle();
+										tpl.all_day_event = all_day_event;
+										tpl.start_date = this.dateFormat(event_list[i].getStartTime());
+										tpl.end_date = this.dateFormat(event_list[i].getEndTime());
+										tpl.guest_list = this.getGuestList(event_list[i]);
+										message_list.push(tpl.evaluate().getContent());
 								}
-
-								// 予定名
-								tpl.title = event_list[i].getTitle();
-
-								// 予定の時刻情報
-								tpl.all_day_event = all_day_event;
-								tpl.start_date = this.dateFormat(event_list[i].getStartTime());
-								tpl.end_date = this.dateFormat(event_list[i].getEndTime());
-
-								// 参加者情報
-								tpl.guest_list = this.getGuestList(event_list[i]);
-
-								// テンプレートからデータ生成
-								message_list.push(tpl.evaluate().getContent());
-						}
-
-						// 送信メッセージ作成
-						var message_tpl = HtmlService.createTemplateFromFile('events');
-						message_tpl.calendar_name = calendar_name;
-						message_tpl.message_list = message_list;
-						message_tpl.title = events_header;
-						message_tpl.title_no_event = events_header_no_event;
-
-						return message_tpl.evaluate().getContent();
-				};
-
-
-				// 通知が必要かチェック（土日は不要なので土日は通知しない）
-				EventNotifier.prototype.needNotify = function() {
-						// 曜日取得
-						var day = (new Date()).getDay();
-						if (day === 0 || day === 6) {
-								return false;
-						}
-
-						return true;
+								// 送信メッセージ作成
+								var message_tpl = HtmlService.createTemplateFromFile('events');
+								message_tpl.calendar_name = calendar_name;
+								message_tpl.message_list = message_list;
+								message_tpl.title = events_header;
+								message_tpl.title_no_event = events_header_no_event;
+								return message_tpl.evaluate().getContent();
+						},
+						/**
+						 * 通知が必要かチェック
+						 */
+						needNotify: function() {
+								var day = (new Date()).getDay();
+								if (0 === day || 6 === day) {
+										return false;
+								}
+								return true;
+						},
 				};
 
 				// 参加者一覧を取得
